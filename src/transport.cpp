@@ -1,6 +1,13 @@
 // Hardware Capability Registry - canonical hardware capability knowledge.
 // Copyright 2026 Summon Software Labs.
 // SPDX-License-Identifier: Apache-2.0
+// The coordinator waits on its listener and every session in one select() set.
+// A Windows fd_set holds FD_SETSIZE sockets (64 by default) and FD_SET silently
+// ignores the rest, so the set is sized here, before any Winsock header.
+#if defined(_WIN32) && !defined(FD_SETSIZE)
+#define FD_SETSIZE 1024
+#endif
+
 #include "hcr/transport.hpp"
 
 #include <mutex>
@@ -176,7 +183,13 @@ Status TcpListener::open_loopback(std::uint16_t port, std::size_t backlog) {
   const SocketHandle listener = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
   if (listener == kInvalidSocket) return last_socket_error("socket");
   const int reuse = 1;
+#if defined(_WIN32)
+  // SO_REUSEADDR on Windows lets a second socket bind a port that is still
+  // listening; exclusive use makes that second bind fail instead.
+  ::setsockopt(listener, SOL_SOCKET, SO_EXCLUSIVEADDRUSE, reinterpret_cast<const char*>(&reuse), sizeof(reuse));
+#else
   ::setsockopt(listener, SOL_SOCKET, SO_REUSEADDR, reinterpret_cast<const char*>(&reuse), sizeof(reuse));
+#endif
   sockaddr_in address{};
   address.sin_family = AF_INET;
   address.sin_port = htons(port);
@@ -280,12 +293,19 @@ Status wait_readable(const TcpConnection* first, const TcpConnection* second, bo
   return Status::success();
 }
 
+std::size_t readiness_set_capacity() noexcept { return static_cast<std::size_t>(FD_SETSIZE); }
+
 Status wait_all_readable(std::uintptr_t listener, const std::vector<std::uintptr_t>& sockets,
                          bool& listener_ready, std::vector<bool>& ready) {
   listener_ready = false;
   ready.assign(sockets.size(), false);
   if (sockets.empty() && listener == 0) {
     return Status::failure(ErrorCode::InvalidArgument, "no sockets to wait on");
+  }
+  // A socket that does not fit in the set would never be watched; refuse instead.
+  if (sockets.size() + (listener != 0 ? 1u : 0u) > readiness_set_capacity()) {
+    return Status::failure(ErrorCode::InvalidArgument,
+                           "more sockets than one readiness wait can watch");
   }
   fd_set read_set;
   FD_ZERO(&read_set);

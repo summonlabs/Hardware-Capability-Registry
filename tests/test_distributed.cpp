@@ -568,3 +568,52 @@ HCR_TEST(distributed, repeated_lifecycle_leaves_no_orphans_and_no_stale_authorit
   }
 #endif
 }
+
+HCR_TEST(distributed, a_second_listener_cannot_take_a_listening_port) {
+#if !defined(_WIN32)
+  HCR_SKIP("distributed proofs require the Windows process and socket implementation");
+#else
+  TcpListener first;
+  HCR_REQUIRE(first.open_loopback(0, 4).ok());
+  std::uint16_t port = 0;
+  first.local_port(port);
+  HCR_REQUIRE(port != 0);
+  // Two coordinators must never share one listening port: the second bind fails.
+  TcpListener second;
+  HCR_CHECK(!second.open_loopback(port, 4).ok());
+#endif
+}
+
+HCR_TEST(distributed, every_admitted_connection_is_answered) {
+#if !defined(_WIN32)
+  HCR_SKIP("distributed proofs require the Windows process and socket implementation");
+#else
+  if (cli_path().empty()) HCR_SKIP("the hcr command line tool was not built");
+  const std::uint16_t port = free_loopback_port();
+  HCR_REQUIRE(port != 0);
+  ChildProcess coordinator;
+  std::string output;
+  std::uint64_t epoch = 0;
+  HCR_REQUIRE_MSG(start_coordinator(coordinator, port, "", output, epoch),
+                  "coordinator did not start: " + output);
+  // Fill the connection limit; every admitted connection, including the last one,
+  // must be answered.
+  const std::size_t limit = RegistryLimits{}.max_connections;
+  std::vector<std::unique_ptr<RawConnection>> peers;
+  std::size_t answered = 0;
+  for (std::size_t i = 0; i < limit; ++i) {
+    auto peer = std::make_unique<RawConnection>();
+    HCR_REQUIRE(peer->open(port));
+    if (peer->handshake().ok()) ++answered;
+    peers.push_back(std::move(peer));
+  }
+  HCR_CHECK_EQ(answered, limit);
+  peers.clear();
+  auto client = connect_client(port);
+  HCR_REQUIRE(client != nullptr);
+  HCR_CHECK(client->shutdown("connection test complete").ok());
+  unsigned long exit_code = 0;
+  HCR_REQUIRE(coordinator.wait_for_exit(exit_code));
+  HCR_CHECK_EQ(exit_code, 0ul);
+#endif
+}

@@ -75,6 +75,9 @@ Status connect_loopback(std::uint16_t port, TcpConnection& out);
 /// socket waits on the first alone. Returns the ready flags in the same order.
 Status wait_readable(const TcpConnection* first, const TcpConnection* second, bool& first_ready, bool& second_ready);
 
+/// The most sockets (listener included) one wait_all_readable call can watch.
+[[nodiscard]] std::size_t readiness_set_capacity() noexcept;
+
 /// Waits until the listener or at least one listed socket is readable. Blocks
 /// indefinitely: the registry configures no timeouts anywhere. Raw handles are
 /// used so the caller keeps ownership of every socket.

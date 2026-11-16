@@ -97,7 +97,7 @@ function(hcr_apply_warnings target)
     # nvcc as bare arguments, where they would be mistaken for input files.
     target_compile_options(${target} PRIVATE
       $<$<COMPILE_LANGUAGE:CXX>:/W4;/permissive-;/Zc:__cplusplus;/EHsc;/utf-8;/bigobj>
-      $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=/W4,-Xcompiler=/EHsc,-Xcompiler=/utf-8>)
+      $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=/W4,/EHsc,/utf-8>)
     if(HCR_WARNINGS_AS_ERRORS)
       target_compile_options(${target} PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/WX>)
     endif()
@@ -111,7 +111,8 @@ function(hcr_apply_warnings target)
   if(HCR_ENABLE_ASAN)
     if(MSVC)
       target_compile_options(${target} PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/fsanitize=address;/Zi>)
-      target_link_options(${target} PRIVATE /INCREMENTAL:NO)
+      # Without /DEBUG every instrumented link warns (LNK4302).
+      target_link_options(${target} PRIVATE /INCREMENTAL:NO /DEBUG)
     else()
       target_compile_options(${target} PRIVATE -fsanitize=address -fno-omit-frame-pointer -g)
       target_link_options(${target} PRIVATE -fsanitize=address)
@@ -221,9 +222,17 @@ if(HCR_BUILD_CUDA_VALIDATION)
     if(MSVC)
       target_compile_options(hcr_cuda_validation PRIVATE
         $<$<COMPILE_LANGUAGE:CXX>:/W4;/permissive-;/EHsc;/utf-8>
-        $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=/W4,-Xcompiler=/EHsc,-Xcompiler=/utf-8>)
+        $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=/W4,/EHsc,/utf-8>)
       if(HCR_WARNINGS_AS_ERRORS)
         target_compile_options(hcr_cuda_validation PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/WX>)
+      endif()
+      if(HCR_ENABLE_ASAN)
+        # The validation program links the instrumented library, so its own host code
+        # must be instrumented too (otherwise LNK2038 annotate_string/annotate_vector).
+        # /Z7 keeps the debug information in the object, clear of the PDB handling above.
+        target_compile_options(hcr_cuda_validation PRIVATE
+          $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=/fsanitize=address,/Z7>)
+        target_link_options(hcr_cuda_validation PRIVATE /INCREMENTAL:NO /DEBUG)
       endif()
     endif()
   else()
@@ -232,6 +241,9 @@ if(HCR_BUILD_CUDA_VALIDATION)
 endif()
 
 if(HCR_BUILD_TESTS AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/CMakeLists.txt")
+  # Testing must be enabled here, at the top of the build tree: enabled only inside
+  # tests/, `ctest --test-dir <build>` found no tests at all and still succeeded.
+  enable_testing()
   add_subdirectory(tests)
 endif()
 if(HCR_BUILD_EXAMPLES AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/examples/CMakeLists.txt")

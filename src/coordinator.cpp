@@ -424,6 +424,11 @@ CapabilityCoordinator::~CapabilityCoordinator() {
 }
 
 Status CapabilityCoordinator::start() {
+  // The listener and every admitted session must fit in one readiness wait.
+  if (impl_->config.limits.max_connections + 1 > readiness_set_capacity()) {
+    return Status::failure(ErrorCode::InvalidArgument,
+                           "max_connections exceeds the sockets one readiness wait can watch");
+  }
   const Status initialized = transport_initialize();
   if (!initialized.ok()) return initialized;
   const Status opened = impl_->listener.open_loopback(impl_->config.port, impl_->config.limits.max_connections);
